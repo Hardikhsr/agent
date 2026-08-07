@@ -1,0 +1,21 @@
+{
+  "name": "teram-agent",
+  "version": "2.0.0",
+  "description": "Teramind Tactical Node - Zero Native Dependencies",
+  "main": "index.js",
+  "bin": "index.js",
+  "scripts": {
+    "build": "pkg . --targets node18-win-x64 --output teram_agent.exe"
+  },
+  "pkg": {
+    "assets": [
+      "ScreenCap.cs"
+    ]
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.13.4",
+    "socket.io-client": "^4.8.3",
+    "winreg": "^1.2.5"
+  }
+}
