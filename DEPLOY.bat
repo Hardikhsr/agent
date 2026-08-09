@@ -38,8 +38,9 @@ echo [+] Preparing system directory...
 if exist "%INSTALL_DIR%" (
    attrib -h -s "%INSTALL_DIR%" /D /S >nul 2>&1
    takeown.exe /F "%INSTALL_DIR%" /R /A /D Y >nul 2>&1
-   icacls.exe "%INSTALL_DIR%" /grant Administrators:F /T /C /Q >nul 2>&1
    icacls.exe "%INSTALL_DIR%" /remove:d Everyone /T /C /Q >nul 2>&1
+   icacls.exe "%INSTALL_DIR%" /remove:d Users /T /C /Q >nul 2>&1
+   icacls.exe "%INSTALL_DIR%" /grant Administrators:F /T /C /Q >nul 2>&1
    icacls.exe "%INSTALL_DIR%" /reset /T /C /Q >nul 2>&1
 )
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"

