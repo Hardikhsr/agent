@@ -832,6 +832,239 @@ setTimeout(defendHostsFile, 2000);
 setInterval(enforceAppBlocking, 10000);
 
 // ═══════════════════════════════════════════════
+// ANTIVIRUS DETECTION & REPORTING
+// Scans for installed AV products via WMI SecurityCenter2
+// Reports status to server for dashboard visibility
+// ═══════════════════════════════════════════════
+let lastAVStatus = null;
+
+function scanAntivirusProducts() {
+    try {
+        const psCmd = `
+$avProducts = @()
+try {
+    $avList = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -EA Stop
+    foreach ($av in $avList) {
+        $state = $av.productState
+        $enabled = (($state -band 0x1000) -ne 0)
+        $upToDate = (($state -band 0x10) -eq 0)
+        $avProducts += [PSCustomObject]@{
+            Name = $av.displayName
+            Enabled = $enabled
+            UpToDate = $upToDate
+            ProductState = $state
+            Path = $av.pathToSignedProductExe
+        }
+    }
+} catch {}
+$avProducts | ConvertTo-Json -Compress
+`;
+        exec(`powershell -NoProfile -WindowStyle Hidden -Command "${psCmd.replace(/\n/g, ' ')}"`, {
+            timeout: 15000, windowsHide: true
+        }, (err, stdout) => {
+            if (err || !stdout || !stdout.trim()) return;
+            try {
+                let products = JSON.parse(stdout.trim());
+                if (!Array.isArray(products)) products = [products];
+
+                lastAVStatus = {
+                    hostname: os.hostname(),
+                    products: products,
+                    scan_time: new Date().toISOString()
+                };
+
+                // Save locally
+                try {
+                    fs.writeFileSync(path.join(extractDir, "av_status.json"), JSON.stringify(lastAVStatus, null, 2));
+                } catch (e) { }
+
+                // Report to server
+                axios.post(`${SERVER_URL}/api/agent/av-status`, lastAVStatus).catch(() => { });
+
+                // Check for AV conflicts
+                for (const av of products) {
+                    if (av.Enabled && av.Name) {
+                        _log(`[AV] Detected active AV: ${av.Name} (Enabled: ${av.Enabled}, Updated: ${av.UpToDate})`);
+                    }
+                }
+            } catch (e) { }
+        });
+    } catch (e) { }
+}
+
+// Run AV scan on boot + every 5 minutes
+setTimeout(scanAntivirusProducts, 10000);
+setInterval(scanAntivirusProducts, 300000);
+
+// ═══════════════════════════════════════════════
+// MICROSOFT DEFENDER VERIFICATION
+// Checks Defender status via Get-MpComputerStatus
+// Reports anomalies (disabled, outdated signatures) to server
+// ═══════════════════════════════════════════════
+let lastDefenderStatus = null;
+
+function checkDefenderStatus() {
+    try {
+        const psCmd = `
+try {
+    $s = Get-MpComputerStatus -EA Stop
+    [PSCustomObject]@{
+        RealTimeEnabled = $s.RealTimeProtectionEnabled
+        AntivirusEnabled = $s.AntivirusEnabled
+        AntispywareEnabled = $s.AntispywareEnabled
+        BehaviorMonitorEnabled = $s.BehaviorMonitorEnabled
+        IoavProtectionEnabled = $s.IoavProtectionEnabled
+        NISEnabled = $s.NISEnabled
+        OnAccessProtectionEnabled = $s.OnAccessProtectionEnabled
+        TamperProtectionSource = $s.IsTamperProtected
+        SignatureLastUpdated = $s.AntivirusSignatureLastUpdated.ToString('o')
+        QuickScanEndTime = $s.QuickScanEndTime.ToString('o')
+        FullScanEndTime = $s.FullScanEndTime.ToString('o')
+        SignatureVersion = $s.AntivirusSignatureVersion
+        EngineVersion = $s.AMEngineVersion
+        ProductVersion = $s.AMProductVersion
+    } | ConvertTo-Json -Compress
+} catch { '{"error":"Defender not available"}' }
+`;
+        exec(`powershell -NoProfile -WindowStyle Hidden -Command "${psCmd.replace(/\n/g, ' ')}"`, {
+            timeout: 15000, windowsHide: true
+        }, (err, stdout) => {
+            if (err || !stdout || !stdout.trim()) return;
+            try {
+                const status = JSON.parse(stdout.trim());
+                lastDefenderStatus = {
+                    hostname: os.hostname(),
+                    ...status,
+                    check_time: new Date().toISOString()
+                };
+
+                // Detect anomalies
+                const anomalies = [];
+                if (status.RealTimeEnabled === false) anomalies.push("Real-time protection DISABLED");
+                if (status.AntivirusEnabled === false) anomalies.push("Antivirus DISABLED");
+                if (status.AntispywareEnabled === false) anomalies.push("Antispyware DISABLED");
+
+                // Check if signatures are >7 days old
+                if (status.SignatureLastUpdated) {
+                    const sigDate = new Date(status.SignatureLastUpdated);
+                    const daysSinceUpdate = (Date.now() - sigDate.getTime()) / (1000 * 60 * 60 * 24);
+                    if (daysSinceUpdate > 7) {
+                        anomalies.push(`Signatures ${Math.round(daysSinceUpdate)} days old`);
+                    }
+                }
+
+                lastDefenderStatus.anomalies = anomalies;
+                lastDefenderStatus.healthy = anomalies.length === 0;
+
+                // Report to server
+                axios.post(`${SERVER_URL}/api/agent/defender-status`, lastDefenderStatus).catch(() => { });
+
+                // Report anomalies as alerts
+                if (anomalies.length > 0) {
+                    _log(`[DEFENDER] ⚠ Anomalies detected: ${anomalies.join(', ')}`);
+                    axios.post(`${SERVER_URL}/api/task-result`, {
+                        hostname: os.hostname(),
+                        taskId: "defender-alert",
+                        output: `DEFENDER ALERT: ${anomalies.join('; ')}`
+                    }).catch(() => { });
+                }
+
+                // Emit via socket if connected
+                if (socket && socket.connected) {
+                    socket.emit("defender-status", lastDefenderStatus);
+                }
+            } catch (e) { }
+        });
+    } catch (e) { }
+}
+
+// Run Defender check on boot + every 10 minutes
+setTimeout(checkDefenderStatus, 12000);
+setInterval(checkDefenderStatus, 600000);
+
+// ═══════════════════════════════════════════════
+// USB / EXTERNAL STORAGE BLOCKING
+// Disables USB mass storage during blackout mode
+// Monitors for device connection attempts
+// ═══════════════════════════════════════════════
+let usbBlockingActive = false;
+
+function enforceUSBBlocking() {
+    if (usbBlockingActive) return;
+    usbBlockingActive = true;
+    _log("[USB] 🔒 Blocking USB storage devices...");
+
+    // Disable USB mass storage driver
+    exec(`reg add "HKLM\\SYSTEM\\CurrentControlSet\\Services\\USBSTOR" /v Start /t REG_DWORD /d 4 /f`, { windowsHide: true }, () => { });
+
+    // Disable removable storage via Group Policy
+    exec(`reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\RemovableStorageDevices" /v Deny_All /t REG_DWORD /d 1 /f`, { windowsHide: true }, () => { });
+
+    // Report to server
+    axios.post(`${SERVER_URL}/api/dlp/usb-events`, {
+        hostname: os.hostname(),
+        username: os.userInfo().username,
+        device_name: "ALL USB STORAGE",
+        action: "Blocked",
+        policy_action: "Blackout Mode Active"
+    }).catch(() => { });
+}
+
+function restoreUSBAccess() {
+    if (!usbBlockingActive) return;
+    usbBlockingActive = false;
+    _log("[USB] 🔓 Restoring USB storage access...");
+
+    // Re-enable USB mass storage driver
+    exec(`reg add "HKLM\\SYSTEM\\CurrentControlSet\\Services\\USBSTOR" /v Start /t REG_DWORD /d 3 /f`, { windowsHide: true }, () => { });
+
+    // Remove removable storage block
+    exec(`reg delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\RemovableStorageDevices" /v Deny_All /f`, { windowsHide: true }, () => { });
+
+    // Report to server
+    axios.post(`${SERVER_URL}/api/dlp/usb-events`, {
+        hostname: os.hostname(),
+        username: os.userInfo().username,
+        device_name: "ALL USB STORAGE",
+        action: "Unblocked",
+        policy_action: "Blackout Mode Deactivated"
+    }).catch(() => { });
+}
+
+// Monitor for USB insertion attempts during blackout
+function monitorUSBInsertions() {
+    if (!usbBlockingActive) return;
+    try {
+        const psCmd = `Get-CimInstance -ClassName Win32_DiskDrive -EA 0 | Where-Object { $_.InterfaceType -eq 'USB' } | Select-Object Model, Size, SerialNumber, Status | ConvertTo-Json -Compress`;
+        exec(`powershell -NoProfile -WindowStyle Hidden -Command "${psCmd}"`, {
+            timeout: 8000, windowsHide: true
+        }, (err, stdout) => {
+            if (err || !stdout || !stdout.trim() || stdout.trim() === '') return;
+            try {
+                let devices = JSON.parse(stdout.trim());
+                if (!Array.isArray(devices)) devices = [devices];
+                if (devices.length > 0) {
+                    devices.forEach(dev => {
+                        axios.post(`${SERVER_URL}/api/dlp/usb-events`, {
+                            hostname: os.hostname(),
+                            username: os.userInfo().username,
+                            device_name: dev.Model || "Unknown USB Device",
+                            serial_number: dev.SerialNumber || "",
+                            device_type: "USB Storage",
+                            action: "Connection Attempt (Blocked)",
+                            policy_action: "Denied - Blackout Active"
+                        }).catch(() => { });
+                    });
+                }
+            } catch (e) { }
+        });
+    } catch (e) { }
+}
+
+// Check for USB insertions every 10 seconds during blackout
+setInterval(monitorUSBInsertions, 10000);
+
+// ═══════════════════════════════════════════════
 // PROCESS WATCHER (REMOTE_ACCESS_TOOL Trigger)
 // ═══════════════════════════════════════════════
 function pollProcessWatchers() {
@@ -979,6 +1212,23 @@ function bindSocketHandlers() {
             exec(`reg add "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" /v NoLogoff /t REG_DWORD /d 1 /f`, { windowsHide: true }, () => { });
             exec(`reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DisableCAD /t REG_DWORD /d 1 /f`, { windowsHide: true }, () => { });
 
+            // ENHANCED SESSION-SWITCH PREVENTION: Block password change and disconnect
+            exec(`reg add "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" /v DisableChangePassword /t REG_DWORD /d 1 /f`, { windowsHide: true }, () => { });
+            exec(`reg add "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" /v NoDisconnect /t REG_DWORD /d 1 /f`, { windowsHide: true }, () => { });
+
+            // BLOCK SAFE MODE BOOT: Prevent user from booting into Safe Mode
+            exec(`bcdedit /set {current} safeboot off`, { windowsHide: true }, () => { });
+            exec(`bcdedit /set {default} recoveryenabled no`, { windowsHide: true }, () => { });
+            exec(`bcdedit /set {current} bootstatuspolicy IgnoreAllFailures`, { windowsHide: true }, () => { });
+
+            // BLOCK RECOVERY ENVIRONMENT & TROUBLESHOOT OPTIONS
+            exec(`reagentc /disable`, { windowsHide: true }, () => { });
+            exec(`bcdedit /set {globalsettings} advancedoptions false`, { windowsHide: true }, () => { });
+            exec(`reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WinRE" /v DisableSetup /t REG_DWORD /d 1 /f`, { windowsHide: true }, () => { });
+
+            // BLOCK STARTUP SETTINGS: Prevent F8 / Shift+Restart access
+            exec(`bcdedit /set {bootmgr} displaybootmenu no`, { windowsHide: true }, () => { });
+
             // BLOCK ACCESSIBILITY EXPLOITS: Disable Sticky Keys, Filter Keys, Toggle Keys, Narrator, Magnifier, On-Screen Keyboard
             exec(`reg add "HKCU\\Control Panel\\Accessibility\\StickyKeys" /v Flags /t REG_SZ /d 506 /f`, { windowsHide: true }, () => { });
             exec(`reg add "HKCU\\Control Panel\\Accessibility\\Keyboard Response" /v Flags /t REG_SZ /d 122 /f`, { windowsHide: true }, () => { });
@@ -989,8 +1239,19 @@ function bindSocketHandlers() {
             exec(`reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\osk.exe" /v Debugger /t REG_SZ /d "systray.exe" /f`, { windowsHide: true }, () => { });
             exec(`reg add "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\Narrator.exe" /v Debugger /t REG_SZ /d "systray.exe" /f`, { windowsHide: true }, () => { });
 
+            // BLOCK USB STORAGE DEVICES during blackout
+            enforceUSBBlocking();
+
             // Start anti-tamper process killer loop
             startBlackoutEnforcer();
+
+            // AUDIT LOG: Report blackout activation to server
+            axios.post(`${SERVER_URL}/api/agent/blackout-audit`, {
+                hostname: os.hostname(),
+                action: "ACTIVATED",
+                details: JSON.stringify({ message: blPayload.message, usb_blocked: true, safe_mode_blocked: true, recovery_blocked: true })
+            }).catch(() => { });
+
         } else {
             try { fs.unlinkSync(blackoutPath); } catch (e) { }
             sendInput("BL 0");
@@ -1006,6 +1267,22 @@ function bindSocketHandlers() {
             exec(`reg delete "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" /v NoLogoff /f`, { windowsHide: true }, () => { });
             exec(`reg delete "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DisableCAD /f`, { windowsHide: true }, () => { });
 
+            // RESTORE: Re-enable password change and disconnect
+            exec(`reg delete "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" /v DisableChangePassword /f`, { windowsHide: true }, () => { });
+            exec(`reg delete "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" /v NoDisconnect /f`, { windowsHide: true }, () => { });
+
+            // RESTORE: Re-enable Safe Mode boot
+            exec(`bcdedit /set {default} recoveryenabled yes`, { windowsHide: true }, () => { });
+            exec(`bcdedit /deletevalue {current} bootstatuspolicy`, { windowsHide: true }, () => { });
+
+            // RESTORE: Re-enable Recovery Environment & Troubleshoot
+            exec(`reagentc /enable`, { windowsHide: true }, () => { });
+            exec(`bcdedit /deletevalue {globalsettings} advancedoptions`, { windowsHide: true }, () => { });
+            exec(`reg delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WinRE" /v DisableSetup /f`, { windowsHide: true }, () => { });
+
+            // RESTORE: Re-enable boot menu
+            exec(`bcdedit /set {bootmgr} displaybootmenu yes`, { windowsHide: true }, () => { });
+
             // RESTORE: Re-enable accessibility
             exec(`reg delete "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\utilman.exe" /f`, { windowsHide: true }, () => { });
             exec(`reg delete "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sethc.exe" /f`, { windowsHide: true }, () => { });
@@ -1013,7 +1290,17 @@ function bindSocketHandlers() {
             exec(`reg delete "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\osk.exe" /f`, { windowsHide: true }, () => { });
             exec(`reg delete "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\Narrator.exe" /f`, { windowsHide: true }, () => { });
 
+            // RESTORE: USB storage access
+            restoreUSBAccess();
+
             stopBlackoutEnforcer();
+
+            // AUDIT LOG: Report blackout deactivation to server
+            axios.post(`${SERVER_URL}/api/agent/blackout-audit`, {
+                hostname: os.hostname(),
+                action: "DEACTIVATED",
+                details: JSON.stringify({ usb_restored: true, safe_mode_restored: true, recovery_restored: true })
+            }).catch(() => { });
         }
     });
     socket.on("burn-sequence", () => {
