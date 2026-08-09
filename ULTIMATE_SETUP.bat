@@ -290,7 +290,7 @@ if %ATTEMPT% equ 3 (
 )
 
 :: Wait for process to stabilize (AV scan takes time)
-timeout /t 5 >nul
+ping 127.0.0.1 -n 6 >nul
 
 :: Check if running
 tasklist /FI "IMAGENAME eq %BIN_NAME%" 2>nul | find /i "%BIN_NAME%" >nul
@@ -301,7 +301,7 @@ if %errorlevel% equ 0 (
 
 :: AV may have killed it — wait longer and retry
 echo     Process not detected. AV may have intervened. Retrying...
-timeout /t 5 >nul
+ping 127.0.0.1 -n 6 >nul
 goto LaunchAttempt
 
 :LaunchDone
@@ -341,8 +341,9 @@ if %LAUNCH_SUCCESS% equ 1 (
 )
 
 echo.
+echo.
 echo You can safely delete this installer folder now.
 echo The agent is installed to: %INSTALL_DIR%
 echo.
-pause
+ping 127.0.0.1 -n 11 >nul
 exit /B
