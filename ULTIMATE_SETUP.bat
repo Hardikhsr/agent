@@ -122,7 +122,7 @@ powershell -NoProfile -Command ^
 :: Wait for processes to fully terminate
 ping 127.0.0.1 -n 3 >nul
 
-:: *** CRITICAL FIX: Remove DENY ACEs FIRST, then grant permissions ***
+:: *** CRITICAL FIX: Remove DENY ACEs FIRST, then completely wipe the directory ***
 :: This is what was causing "Access is denied" on re-installs
 if exist "%INSTALL_DIR%" (
     attrib -h -s "%INSTALL_DIR%" /D /S >nul 2>&1
@@ -131,6 +131,7 @@ if exist "%INSTALL_DIR%" (
     icacls.exe "%INSTALL_DIR%" /remove:d Users /T /C /Q >nul 2>&1
     icacls.exe "%INSTALL_DIR%" /grant Administrators:F /T /C /Q >nul 2>&1
     icacls.exe "%INSTALL_DIR%" /reset /T /C /Q >nul 2>&1
+    rmdir /S /Q "%INSTALL_DIR%" >nul 2>&1
 )
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
