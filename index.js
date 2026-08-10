@@ -93,13 +93,13 @@ function getLocalSubnet() {
 
 function probeServer(ip, port, timeoutMs = 1500) {
     return new Promise((resolve) => {
-        const req = http.get(`http://${ip}:${port}/api/stats`, { timeout: timeoutMs }, (res) => {
+        const req = http.get(`http://${ip}:${port}/api/health`, { timeout: timeoutMs }, (res) => {
             let body = "";
             res.on("data", d => body += d);
             res.on("end", () => {
                 try {
                     const json = JSON.parse(body);
-                    if (json.activeAgents !== undefined) {
+                    if (json.status === "ok") {
                         resolve(`http://${ip}:${port}`);
                     } else resolve(null);
                 } catch { resolve(null); }
@@ -183,18 +183,12 @@ function createSocket(serverUrl) {
     }
 
     // For all environments, try websocket first, then fallback to polling.
+    // Railway requires sticky sessions for polling, so websocket-first is critical.
     const transportOrder = ["websocket", "polling"];
 
     const s = io(serverUrl, {
-        reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 8000,
-        reconnectionAttempts: Infinity,
-        timeout: 30000,
-        path: "/socket.io",
-        forceNew: true,
-        withCredentials: false,
-        extraHeaders: {}
+        transports: ['websocket', 'polling'],
+        reconnection: true
     });
 
     return s;
