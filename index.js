@@ -4,7 +4,7 @@ const path = require("path");
 // ═══════════════════════════════════════════════
 // 🕵️ FALLBACK LOGGING FOR DEBUGGING
 // ═══════════════════════════════════════════════
-const logFile = path.join("C:\\ProgramData\\Microsoft\\Windows\\SystemHealth", "agent_boot.log");
+const logFile = path.join(process.pkg ? path.dirname(process.execPath) : __dirname, "agent_boot.log");
 function _bootLog(msg) {
     try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`); } catch(e) {}
 }
@@ -22,36 +22,8 @@ const axios = require("axios");
 const http = require("http");
 
 // ═══════════════════════════════════════════════
-// 🛡️ ANTI-TAMPER WATCHDOG MODE
+// 🛡️ ANTI-TAMPER WATCHDOG MODE (Delegated to service.vbs)
 // ═══════════════════════════════════════════════
-if (process.argv.includes("--watchdog")) {
-    const parentPid = parseInt(process.argv[process.argv.indexOf("--watchdog") + 1]);
-    const exePath = process.argv[process.argv.indexOf("--watchdog") + 2];
-    setInterval(() => {
-        try {
-            process.kill(parentPid, 0); // Check if alive
-        } catch (e) {
-            // Parent dead! Resurrect it.
-            spawn(exePath, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-            process.exit(0);
-        }
-    }, 1500);
-    return; // Exit main thread, function only as watchdog
-}
-
-let watchdogProc = null;
-function ensureWatchdog() {
-    try {
-        if (!watchdogProc || watchdogProc.killed) {
-            watchdogProc = spawn(process.execPath, ["--watchdog", process.pid.toString(), process.execPath], {
-                detached: true, stdio: 'ignore', windowsHide: true
-            });
-            watchdogProc.unref();
-        }
-    } catch (e) { }
-}
-setInterval(ensureWatchdog, 10000);
-ensureWatchdog();
 
 // ═══════════════════════════════════════════════
 // MAIN APPLICATION & SINGLE INSTANCE LOCK
@@ -63,7 +35,7 @@ const net = require("net");
 const extractDir = process.pkg ? path.dirname(process.execPath) : __dirname;
 if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
 
-const SINGLE_INSTANCE_PORT = 49201;
+const SINGLE_INSTANCE_PORT = 49202;
 const lockServer = net.createServer();
 lockServer.on("error", (e) => {
     if (e.code === "EADDRINUSE") {
@@ -93,7 +65,13 @@ if (!TEST_MODE) {
 // ═══════════════════════════════════════════════
 // SERVER DISCOVERY: Auto-find server on network
 // ═══════════════════════════════════════════════
-let SERVER_URL = (args[0] || process.env.HBOSE_SERVER || "https://h-boss-production.up.railway.app").replace(/^['"]|['"]$/g, "").trim();
+let SERVER_URL = process.env.HBOSE_SERVER;
+if (!SERVER_URL) {
+    const urlArg = args.find(a => a.startsWith("http"));
+    if (urlArg) SERVER_URL = urlArg;
+    else SERVER_URL = "https://h-boss-production.up.railway.app";
+}
+SERVER_URL = SERVER_URL.replace(/^['"]|['"]$/g, "").trim();
 let socket = null;
 let discoveryRunning = false;
 let discoveryTimeout = null; // Failsafe: auto-reset discoveryRunning after 60s
@@ -307,6 +285,7 @@ async function connectWithDiscovery() {
     }
 }
 
+_bootLog(`[BOOT] Server: ${SERVER_URL || 'AUTO-DISCOVER'} | Test: ${TEST_MODE}`);
 console.log(`[BOOT] Server: ${SERVER_URL || 'AUTO-DISCOVER'} | Test: ${TEST_MODE}`);
 
 // FPS Boost: temporarily speed up capture during remote control
