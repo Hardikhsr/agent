@@ -187,15 +187,14 @@ function createSocket(serverUrl) {
 
     const s = io(serverUrl, {
         reconnection: true,
-        reconnectionDelay: 1000,      // Start at 1s
-        reconnectionDelayMax: 8000,    // Cap at 8s
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 8000,
         reconnectionAttempts: Infinity,
-        timeout: 30000,               // 30s timeout for cloud latency
-        transports: transportOrder,
-        path: "/socket.io",           // Match the Next.js rewrite path
+        timeout: 30000,
+        path: "/socket.io",
         forceNew: true,
-        withCredentials: false,        // No cookies needed for agent auth
-        extraHeaders: {}               // Clean headers — no browser origin
+        withCredentials: false,
+        extraHeaders: {}
     });
 
     return s;
